@@ -41,6 +41,31 @@ async function collect(events: AsyncIterable<AssistantMessageEvent>): Promise<{ 
 
 const context = normalizeContext({ messages: [{ role: 'user', content: 'hi', timestamp: 0 }] })
 
+/**
+ * Assert pi-ai's incremental argument contract: each `toolcall_delta` carries the
+ * value parsed from the argument text received so far, the value only grows, and
+ * the finished call carries the exact arguments. Snapshots may stay partial
+ * (`file_path` reaches `notes.md` before `content` finishes), but a caller can
+ * never observe a value the model did not send.
+ */
+function expectIncrementalArguments(partials: unknown[], final: unknown): void {
+  expect(partials).toHaveLength(fragments.length)
+  const snapshots = partials.map((partial) => {
+    expect(partial).toBeTypeOf('object')
+    return partial as { file_path?: string; content?: string }
+  })
+  expect(snapshots[0]).toEqual({})
+  expect(snapshots.at(-1)).toEqual(args)
+  // Every string a snapshot exposes is a prefix of the value the finished call carries.
+  const paths = snapshots.map(snapshot => snapshot.file_path).filter((path): path is string => path !== undefined)
+  const contents = snapshots.map(snapshot => snapshot.content).filter((content): content is string => content !== undefined)
+  expect(paths.length).toBeGreaterThan(1)
+  expect(contents.length).toBeGreaterThan(1)
+  expect(paths.every(path => 'notes.md'.startsWith(path))).toBe(true)
+  expect(contents.every(content => args.content.startsWith(content))).toBe(true)
+  expect(final).toEqual(args)
+}
+
 describe('streamed tool-call arguments (patched pi-ai)', () => {
   it('preserves an empty Responses message after parallel tool calls with its replay metadata', async () => {
     const calls = [0, 1, 2].map(index => ({ type: 'function_call', call_id: `call_${index}`, id: `item_${index}`, name: 'read', arguments: '{}' }))
@@ -71,7 +96,7 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
     expect(server.requests).toHaveLength(1)
   })
 
-  it('openai-completions parses arguments once, at the end of the call', async () => {
+  it('openai-completions streams incremental argument snapshots', async () => {
     const server = await mockServer([{ events: [
       JSON.stringify({ choices: [{
         delta: {
@@ -88,12 +113,10 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
     ] }])
     const events = streamCompletions(model('openai-completions', server.url), context, { apiKey: 'test-key' })
     const { partials, final } = await collect(events)
-    expect(partials).toHaveLength(fragments.length)
-    expect(partials.every(partial => JSON.stringify(partial) === '{}')).toBe(true)
-    expect(final).toEqual(args)
+    expectIncrementalArguments(partials, final)
   })
 
-  it('anthropic-messages parses arguments once, at the end of the call', async () => {
+  it('anthropic-messages streams incremental argument snapshots', async () => {
     const server = await mockServer([{ events: [
       anthropicMessageStart,
       frame({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'write', input: {} } }),
@@ -106,12 +129,10 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
     ] }])
     const events = streamAnthropic(model('anthropic-messages', server.url), context, { apiKey: 'test-key' })
     const { partials, final } = await collect(events)
-    expect(partials).toHaveLength(fragments.length)
-    expect(partials.every(partial => JSON.stringify(partial) === '{}')).toBe(true)
-    expect(final).toEqual(args)
+    expectIncrementalArguments(partials, final)
   })
 
-  it('openai-responses parses arguments once, at the end of the call', async () => {
+  it('openai-responses streams incremental argument snapshots', async () => {
     const item = { type: 'function_call', call_id: 'call_1', id: 'fc_1', name: 'write' }
     const server = await mockServer([{ events: [
       '{"type":"response.created","response":{"id":"resp_1"}}',
@@ -125,8 +146,6 @@ describe('streamed tool-call arguments (patched pi-ai)', () => {
     ] }])
     const events = streamResponses(model('openai-responses', server.url), context, { apiKey: 'test-key' })
     const { partials, final } = await collect(events)
-    expect(partials).toHaveLength(fragments.length)
-    expect(partials.every(partial => JSON.stringify(partial) === '{}')).toBe(true)
-    expect(final).toEqual(args)
+    expectIncrementalArguments(partials, final)
   })
 })

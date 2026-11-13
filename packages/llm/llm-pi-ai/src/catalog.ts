@@ -273,6 +273,9 @@ const COMPLETIONS_COMPAT_GATE = {
   supportsMidConvoSystemMessages: 'withhold',
   supportsMidConvoToolAdditions: 'withhold',
   sessionAffinityFormat: 'withhold',
+  requiresNonNullAssistantContent: 'withhold',
+  requiresToolsWithToolHistory: 'withhold',
+  promptCacheKeyMode: 'withhold',
 } as const satisfies Record<keyof OpenAICompletionsCompat, CompatDisposition>
 
 /** Disposition of every `OpenAIResponsesCompat` field; a drift gate like the one above. */
@@ -288,6 +291,7 @@ const RESPONSES_COMPAT_GATE = {
   supportsExplicitPromptCacheMode: 'withhold',
   supportsMidConvoSystemMessages: 'withhold',
   supportsMidConvoEffort: 'withhold',
+  promptCacheKeyMode: 'withhold',
 } as const satisfies Record<keyof OpenAIResponsesCompat, CompatDisposition>
 
 /** Disposition of every `AnthropicMessagesCompat` field; a drift gate like the one above. */
@@ -305,6 +309,7 @@ const ANTHROPIC_COMPAT_GATE = {
   supportsMidConvoToolChanges: 'withhold',
   supportsMidConvoEffort: 'withhold',
   allowedFallbackModels: 'withhold',
+  supportsMessageThreads: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
 
 /** Disposition of every `BedrockCompat` field; a drift gate like the one above. */
@@ -479,8 +484,23 @@ export type EveryOfferedFieldIsDocumented = AssertNever<Exclude<OfferedCompatFie
 /** Compile-time constraint that `T` is `true`. */
 type AssertTrue<T extends true> = T
 
-/** Every compat type a gate classifies, merged so one `Pick` reaches all offered fields. */
+/** Every compat type a gate classifies, merged so one lookup reaches all offered fields. */
 type UpstreamCompat = OpenAICompletionsCompat & OpenAIResponsesCompat & AnthropicMessagesCompat & BedrockCompat & MistralConversationsCompat
+
+/**
+ * Values the documented profile fields accept. Upstream writes `| undefined`
+ * inside every optional member while the profile leaves optionality to `?`;
+ * `exactOptionalPropertyTypes` makes that difference reject a plain `Pick`
+ * comparison, so each side is read one field at a time without it.
+ */
+type ProfileCompatValues = {
+  [K in OfferedCompatField]-?: Exclude<K extends keyof PiAiCompatProfile ? PiAiCompatProfile[K] : never, undefined>
+}
+
+/** Values upstream accepts for those same fields, read the same way. */
+type UpstreamCompatValues = {
+  [K in OfferedCompatField]-?: Exclude<K extends keyof UpstreamCompat ? UpstreamCompat[K] : never, undefined>
+}
 
 /**
  * Proof that each documented field carries its upstream type, not a hand-copied
@@ -492,8 +512,8 @@ type UpstreamCompat = OpenAICompletionsCompat & OpenAIResponsesCompat & Anthropi
  * union would otherwise leave configuration silently behind.
  */
 export type EveryProfileFieldMatchesUpstream = AssertTrue<
-  PiAiCompatProfile extends Partial<Pick<UpstreamCompat, OfferedCompatField>>
-    ? Partial<Pick<UpstreamCompat, OfferedCompatField>> extends PiAiCompatProfile ? true : false
+  ProfileCompatValues extends UpstreamCompatValues
+    ? UpstreamCompatValues extends ProfileCompatValues ? true : false
     : false
 >
 

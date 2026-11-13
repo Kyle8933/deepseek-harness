@@ -249,27 +249,28 @@ describe('historical tool availability on the wire', () => {
     })
   })
 
-  it('loads Codex tool additions through tool-search output', async () => {
+  it('declares Codex tool additions as additional-tools items', async () => {
     // Codex extracts an account id from the token before contacting the mock server.
     const payload = Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' } })).toString('base64url')
     const token = `e30.${payload}.fixture`
     const update = addition()
-    const { requests } = await send('openai-codex', 'gpt-5.5', {
+    const { requests } = await send('openai-codex', 'gpt-5.6-luna', {
       messages: [user('first'), update], tools: [baseline, added],
       toolHistory: { tools: [baseline], updates: [{ messageId: update.id, additions: [added] }] },
     }, token)
     expect(requests).toHaveLength(1)
-    expect(requests[0]).toMatchObject({
-      tools: [{ type: 'function', name: 'read' }],
-      input: [
-        { role: 'user', content: [{ type: 'input_text', text: 'first' }] },
-        { type: 'tool_search_call', execution: 'client', arguments: { query: 'search', limit: 1 } },
-        { type: 'tool_search_output', execution: 'client', tools: [
-          { type: 'function', name: 'search', description: added.description, parameters: added.parameters, defer_loading: true },
-        ] },
-        { role: 'developer', content: 'Instruction one.\nInstruction two.' },
-      ],
-    })
+    // Codex models accept tool changes mid-conversation, so declarations ride the
+    // transcript instead of a top-level `tools` list.
+    expect(requests[0]).not.toHaveProperty('tools')
+    expect(requests[0]).toHaveProperty('input', [
+      expect.objectContaining({ type: 'additional_tools', tools: [expect.objectContaining({ name: 'read', description: baseline.description })] }),
+      { role: 'user', content: [{ type: 'input_text', text: 'first' }] },
+      expect.objectContaining({ role: 'developer', content: expect.stringContaining('incremental tools update') as string }),
+      expect.objectContaining({ type: 'additional_tools', tools: [
+        expect.objectContaining({ name: 'search', description: added.description, parameters: added.parameters }),
+      ] }),
+      { role: 'developer', content: 'Instruction one.\nInstruction two.' },
+    ])
   })
 
   it('retains removed declarations and reactivates them through Anthropic history', async () => {
@@ -292,15 +293,19 @@ describe('historical tool availability on the wire', () => {
   it('rebuilds the Responses baseline after its immediate tool is removed', async () => {
     const update = addition()
     const remove = createDeveloperMessage({ source: { kind: 'tool-registry' }, content: [{ type: 'tool-removal', toolName: 'read' }] })
-    const { requests } = await send('openai', 'gpt-5.4', {
+    const { requests } = await send('openai', 'gpt-5.6-luna', {
       messages: [user('first'), update, remove], tools: [added],
       toolHistory: { tools: [baseline], updates: [
         { messageId: update.id, additions: [added] }, { messageId: remove.id, additions: [] },
       ] },
     })
     expect(requests).toHaveLength(1)
-    expect(requests[0]).toHaveProperty('tools', [expect.objectContaining({ name: 'search' })])
+    // The removed baseline leaves only the surviving tool, declared in the transcript.
+    expect(requests[0]).not.toHaveProperty('tools')
     expect(requests[0]).toHaveProperty('input', [
+      expect.objectContaining({ type: 'additional_tools', tools: [
+        expect.objectContaining({ name: 'search', description: added.description, parameters: added.parameters }),
+      ] }),
       { role: 'user', content: [{ type: 'input_text', text: 'first' }] },
       { role: 'developer', content: 'Instruction one.\nInstruction two.' },
     ])

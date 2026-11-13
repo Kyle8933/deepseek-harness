@@ -278,10 +278,10 @@ const chatTemplateKwarg: z<ChatTemplateKwargValue> = z.union([
   z.number(),
   z.boolean(),
   z.const(null),
-  z.object({
-    $var: z.union(CHAT_TEMPLATE_VARS).required(),
-    omitWhenOff: z.boolean(),
-  }),
+  // schemastery declares every object member in its output type, so writing
+  // `omitWhenOff` or leaving it out are two members rather than one optional field.
+  z.object({ $var: z.union(CHAT_TEMPLATE_VARS).required(), omitWhenOff: z.boolean().required() }),
+  z.object({ $var: z.union(CHAT_TEMPLATE_VARS).required() }),
 ])
 
 const compatProfile: z<PiAiCompatProfile> = z.object({
